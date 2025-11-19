@@ -1,3 +1,14 @@
+# Python 가상환경
+venv310/
+
+# IDE 설정
+.vscode/
+.idea/
+
+# 캐시/임시 파일
+__pycache__/
+*.pyc
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

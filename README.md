@@ -48,3 +48,11 @@ python app.py
 | **[FEAT]**  | 새로운 기능 추가       | [FEAT] 새로운 제스처 분류 추가     |
 | **[DATA]**  | 데이터 관련          | [DATA] 제스처 학습용 데이터 추가  |
 ---
+## [3] 팀원 각자의 로컬 브랜치 설정 및 작업 절차
+```bash
+1. git fetch
+2. git checkout <원격 브랜치 이름>  # 로컬 브랜치 생성
+3. 작업 후 git add, git commit
+4. git push origin <브랜치 이름>
+```
+---

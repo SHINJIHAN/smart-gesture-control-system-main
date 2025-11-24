@@ -1,37 +1,39 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 import csv
-import copy
-import argparse
-import itertools
+import copy #이거는 그대로 복사를 하는 빙식이다 이것을 한이유는 원래의 이미지 데이터를 유지하면서 복사본 영상에 하는 방식이기 때문
+# Q: 이게 필수 일까?
+import argparse # 터미넬에서 실행을 할때 -- 이것과 같이 뒤에 뭔가 붙이는것을 해석해주는 모듈
+import itertools # [[x,y], [x,y]] 형태의 좌표 데이터를 [x, y, x, y]로 한 줄로 펴줌.
 from collections import Counter
-from collections import deque
+from collections import deque # 이거는 리스트에서 길이 제한을 두는것 -> 영원히 손가락이 어디로 움직이는 알 필요가 없어서(16프레임만 알면 되니까)
 
-import cv2 as cv
+import cv2 as cv# 컴퓨터 비전
 import numpy as np
-import mediapipe as mp
+import mediapipe as mp #이거는 그냥 핵심 모듈
 
-from utils import CvFpsCalc
+from utils import CvFpsCalc# Computer Vision Frames Per Second Calculator// 프레임을 계산하기 위한것 
 from model import KeyPointClassifier
+# keypoint_classification_EN.ipynb에서 만든 'keypoint_classifier.tflite' 이 파잉을 불러와서 정답인지 아닌지 해주는 역활 
 from model import PointHistoryClassifier
+# point_history_classification.ipynb여기에서 만들어진 point_history_classifier.tflite이 파잉을 사용하여 과거 16프레임의 뒈적 데이터를 넘겨줘서 움직임의 종류를 알려줌
 
 
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--device", type=int, default=0)# 사용하는 카메라의 ID
     parser.add_argument("--width", help='cap width', type=int, default=960)
     parser.add_argument("--height", help='cap height', type=int, default=540)
 
-    parser.add_argument('--use_static_image_mode', action='store_true')
+    parser.add_argument('--use_static_image_mode', action='store_true')# 사진 모드로 할지 선택(비디오가 아닌 매프레임을 사진으로 인식하자는 의미)
+    # parser.add_argument('--use_static_image_mode', action='store_false') # 느리지만 정확히
     parser.add_argument("--min_detection_confidence",
                         help='min_detection_confidence',
                         type=float,
-                        default=0.7)
+                        default=0.7)# 신뢰도의 수준(이거는 멈춰 있을때의 신뢰도를 의미함)
     parser.add_argument("--min_tracking_confidence",
                         help='min_tracking_confidence',
                         type=int,
-                        default=0.5)
+                        default=0.5)# 손추적 민감도 (그니까 이거는 따라가는 것을 의미한다)
 
     args = parser.parse_args()
 
@@ -39,8 +41,8 @@ def get_args():
 
 
 def main():
-    # Argument parsing #################################################################
-    args = get_args()
+    # 위에서 정한 설정들 가져오기
+    args = get_args() # 일단 터미멀에서 킴
 
     cap_device = args.device
     cap_width = args.width
@@ -52,25 +54,26 @@ def main():
 
     use_brect = True
 
-    # Camera preparation ###############################################################
+    # 카메라 키기
     cap = cv.VideoCapture(cap_device)
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
-    # Model load #############################################################
-    mp_hands = mp.solutions.hands
+    # ai모델 가져오기
+    mp_hands = mp.solutions.hands# 손을 찾는 모델
     hands = mp_hands.Hands(
-        static_image_mode=use_static_image_mode,
-        max_num_hands=1,
-        min_detection_confidence=min_detection_confidence,
-        min_tracking_confidence=min_tracking_confidence,
+        static_image_mode=use_static_image_mode,# 아까 동영상 혹은 사진 모드 가져오기
+        max_num_hands=2,# 손 인식 개수
+        min_detection_confidence=min_detection_confidence, # 인지 민감도
+        min_tracking_confidence=min_tracking_confidence,# 추적 민감도
     )
 
-    keypoint_classifier = KeyPointClassifier()
+    keypoint_classifier = KeyPointClassifier()# 모양 판독기
 
-    point_history_classifier = PointHistoryClassifier()
+    point_history_classifier = PointHistoryClassifier() # 움직임 판독기
 
-    # Read labels ###########################################################
+    # csv 파일을 가져오는 역활 ###############################################################
+    # 족보 느낌으로 가져오는 방식
     with open('model/keypoint_classifier/keypoint_classifier_label.csv',
               encoding='utf-8-sig') as f:
         keypoint_classifier_labels = csv.reader(f)
@@ -85,93 +88,117 @@ def main():
             row[0] for row in point_history_classifier_labels
         ]
 
-    # FPS Measurement ########################################################
+    # FPS 지정
+    # 이것을 하는 이유는 컴터마다 다르기 때문에 지정을 하는 것이다
     cvFpsCalc = CvFpsCalc(buffer_len=10)
 
-    # Coordinate history #################################################################
+    # 이게 16프레임을 저장하는 방식
     history_length = 16
     point_history = deque(maxlen=history_length)
 
     # Finger gesture history ################################################
-    finger_gesture_history = deque(maxlen=history_length)
+    finger_gesture_history = deque(maxlen=history_length)# 16개 중에서 가장 많이 나온것을 정답으로 한다
 
     #  ########################################################################
     mode = 0
 
     while True:
-        fps = cvFpsCalc.get()
+        fps = cvFpsCalc.get() #현재 프레임 측정
 
-        # Process Key (ESC: end) #################################################
+        #  탈출키 
         key = cv.waitKey(10)
         if key == 27:  # ESC
             break
-        number, mode = select_mode(key, mode)
+        number, mode = select_mode(key, mode) # 0~9 숫자키 누르면 데이터 수집 모드 변경 
 
         # Camera capture #####################################################
         ret, image = cap.read()
         if not ret:
             break
-        image = cv.flip(image, 1)  # Mirror display
-        debug_image = copy.deepcopy(image)
+        image = cv.flip(image, 1)  # 좌우 반전
+        debug_image = copy.deepcopy(image)# 이게 복사본을 만드는것 그림을 그리기 위해
 
         # Detection implementation #############################################################
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
 
+        # ################################################################
         image.flags.writeable = False
+        # 이미 복사본이 있으니 굳이 새거로 계속 만들필요가 없으니 빠르게 기존의 것에서 하라는 의미
+        # 메모리 아낌 ,속도하고도
         results = hands.process(image)
+        # 21개의 관절이 어디에 있는지 확인 하기
+        #results.multi_hand_landmarks: 손가락 관절 좌표 리스트 (가장 중요!)
+        # results.multi_handedness: 왼손인지 오른손인지 정보
         image.flags.writeable = True
+        # 이제부터는 다시 수정 하는것을 허요하느것
+        # 이제 화면에서 그림을 그림
+        # ################################################################
 
-        #  ####################################################################
-        if results.multi_hand_landmarks is not None:
-            for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
+        # ################################################################
+        if results.multi_hand_landmarks is not None:# 만약에 손이 있다면
+            for hand_landmarks, handedness in zip(results.multi_hand_landmarks,# 2개있을수도 있으니 for문으로 순서 지정
                                                   results.multi_handedness):
-                # Bounding box calculation
+                # 박스 계산: 손을 감싸는 네모칸 좌표를 구함
                 brect = calc_bounding_rect(debug_image, hand_landmarks)
-                # Landmark calculation
+                
+                # 좌표 변환: 0.0~1.0 비율 좌표를 -> 실제 픽셀 좌표(예: 1920, 1080)로 바꿈
                 landmark_list = calc_landmark_list(debug_image, hand_landmarks)
 
-                # Conversion to relative coordinates / normalized coordinates
-                pre_processed_landmark_list = pre_process_landmark(
-                    landmark_list)
-                pre_processed_point_history_list = pre_process_point_history(
-                    debug_image, point_history)
-                # Write to the dataset file
-                logging_csv(number, mode, pre_processed_landmark_list,
-                            pre_processed_point_history_list)
+                # 전처리 1 (모양용): 손목을 (0,0)으로 만들고 크기를 1로 맞춤 (정적 AI용)
+                pre_processed_landmark_list = pre_process_landmark(landmark_list)
+                
+                # 전처리 2 (움직임용): 과거 궤적 데이터를 AI가 좋아하는 형태로 바꿈 (동적 AI용)
+                pre_processed_point_history_list = pre_process_point_history(debug_image, point_history)
 
-                # Hand sign classification
+
+                # 만약 키보드(0~9)를 눌렀다면, 지금 좌표를 CSV 파일에 저장!
+                logging_csv(number, mode, pre_processed_landmark_list, pre_processed_point_history_list)
+            
+                # AI에게 물어봄: "이 손 모양(pre_processed_landmark_list)이 주먹이야 가위야?"
                 hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-                if hand_sign_id == 2:  # Point gesture
+                # 결과: hand_sign_id에는 0, 1, 2 같은 숫자가 들어감 (0:주먹, 1:보자기...)
+
+                # 만약 손 모양이 '2번(검지 펴기)'이라면?
+                if hand_sign_id == 2:
+                    # 검지 끝(8번 관절)의 좌표를 궤적 리스트에 추가!
                     point_history.append(landmark_list[8])
                 else:
+                    # 다른 손 모양이면 궤적을 저장하지 않음 (0, 0을 넣어서 끊어버림)
                     point_history.append([0, 0])
+                # 근데 왜 2만 측정을 하는거지?
+                # 다른거는 정의가 안되어 있나?
 
-                # Finger gesture classification
-                finger_gesture_id = 0
+
+                # 어떻게 움직였는지 확인하고자함
+                finger_gesture_id = 0# 기본 정지 생태
                 point_history_len = len(pre_processed_point_history_list)
                 if point_history_len == (history_length * 2):
+                    # AI에게 물어봄: "이 궤적(pre_processed...)이 왼쪽이야 오른쪽이야?"
                     finger_gesture_id = point_history_classifier(
                         pre_processed_point_history_list)
 
-                # Calculates the gesture IDs in the latest detection
+                # 결과 안정화: 최근 16번의 예측 결과 중 가장 많이 나온 걸 최종 답으로 결정
                 finger_gesture_history.append(finger_gesture_id)
-                most_common_fg_id = Counter(
-                    finger_gesture_history).most_common()
+                most_common_fg_id = Counter(finger_gesture_history).most_common()
 
-                # Drawing part
-                debug_image = draw_bounding_rect(use_brect, debug_image, brect)
-                debug_image = draw_landmarks(debug_image, landmark_list)
-                debug_image = draw_info_text(
+                ##################################################
+                # 여기가 이제 그리는 부분
+                debug_image = draw_bounding_rect(use_brect, debug_image, brect) # 박스 그리기
+                debug_image = draw_landmarks(debug_image, landmark_list) # 손 뼈대와 관절 점 그리ㅣ
+                debug_image = draw_info_text( #이게 결과 텍스트 쓰는것
                     debug_image,
                     brect,
                     handedness,
                     keypoint_classifier_labels[hand_sign_id],
                     point_history_classifier_labels[most_common_fg_id[0][0]],
                 )
+        # 마무리 출력
         else:
             point_history.append([0, 0])
 
+        # 손가락이 지나간 자리에 선 그리기
         debug_image = draw_point_history(debug_image, point_history)
+        # FPS속도 정보 표시
         debug_image = draw_info(debug_image, fps, mode, number)
 
         # Screen reflection #############################################################
@@ -186,19 +213,19 @@ def main():
 
 
 def select_mode(key, mode):
-    number = -1
+    number = -1# 아무것도 없을때
     if 48 <= key <= 57:  # 0 ~ 9
         number = key - 48
-    if key == 110:  # n
+    if key == 110:  # n 기본모드 -> 그냥 관전 모드. 저장안함
         mode = 0
-    if key == 107:  # k
+    if key == 107:  # k -> 정적 제스처 데이터 수집(모양)
         mode = 1
-    if key == 104:  # h
+    if key == 104:  # h -> 동적인 데이터 모집 (움직임)
         mode = 2
     return number, mode
 
 
-def calc_bounding_rect(image, landmarks):
+def calc_bounding_rect(image, landmarks): #네모박스를 계산 하는 코드
     image_width, image_height = image.shape[1], image.shape[0]
 
     landmark_array = np.empty((0, 2), int)
@@ -216,7 +243,7 @@ def calc_bounding_rect(image, landmarks):
     return [x, y, x + w, y + h]
 
 
-def calc_landmark_list(image, landmarks):
+def calc_landmark_list(image, landmarks):# 이거는 내 컴터의 비율을 가져와서 그 다음에 실제 px로 바까주는 방식
     image_width, image_height = image.shape[1], image.shape[0]
 
     landmark_point = []
@@ -232,7 +259,7 @@ def calc_landmark_list(image, landmarks):
     return landmark_point
 
 
-def pre_process_landmark(landmark_list):
+def pre_process_landmark(landmark_list): # 이걸로 추적하는 방식인가?
     temp_landmark_list = copy.deepcopy(landmark_list)
 
     # Convert to relative coordinates
@@ -259,7 +286,10 @@ def pre_process_landmark(landmark_list):
     return temp_landmark_list
 
 
-def pre_process_point_history(image, point_history):
+def pre_process_point_history(image, point_history): #이거는 모델에게 주기전에 가공을 하는 코드
+    # 1. 기준점(0,0)으로 초기화
+    # 2. 크기 정규화
+    # 3. 1차원 리스트로 펴기
     image_width, image_height = image.shape[1], image.shape[0]
 
     temp_point_history = copy.deepcopy(point_history)
@@ -282,7 +312,7 @@ def pre_process_point_history(image, point_history):
     return temp_point_history
 
 
-def logging_csv(number, mode, landmark_list, point_history_list):
+def logging_csv(number, mode, landmark_list, point_history_list): #실제 파일에 저장하는 코드
     if mode == 0:
         pass
     if mode == 1 and (0 <= number <= 9):

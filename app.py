@@ -178,7 +178,7 @@ def main():
         # cv.imshow('Hand Gesture Recognition', debug_image)
         window_name = 'Hand Gesture Recognition'
         cv.namedWindow(window_name, cv.WINDOW_NORMAL)
-        cv.setWindowProperty(window_name, cv.WND_PROP_FULLSCREEN, cv.WINDOW_FULLSCREEN)
+        # cv.setWindowProperty(window_name, cv.WND_PROP_FULLSCREEN, cv.WINDOW_FULLSCREEN)
         cv.imshow(window_name, debug_image)
 
     cap.release()
